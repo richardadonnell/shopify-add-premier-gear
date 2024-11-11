@@ -24,6 +24,7 @@ def get_all_products_graphql():
                     node {
                         id
                         title
+                        tags
                     }
                 }
                 pageInfo {
@@ -43,7 +44,14 @@ def get_all_products_graphql():
         response = requests.post(url, json={'query': query}, headers=headers)
         
         if response.status_code == 200:
-            data = response.json()['data']['products']
+            json_response = response.json()
+            
+            # Check for GraphQL errors
+            if 'errors' in json_response:
+                print("GraphQL errors:", json_response['errors'])
+                break
+                
+            data = json_response['data']['products']
             
             # Extract products from the response
             for edge in data['edges']:
@@ -60,3 +68,6 @@ def get_all_products_graphql():
 # Get and print all products
 all_products = get_all_products_graphql()
 print(f"Total products found: {len(all_products)}")
+# Print first product's tags as an example
+if all_products:
+    print(f"Example - First product tags: {all_products[0]['tags']}")
