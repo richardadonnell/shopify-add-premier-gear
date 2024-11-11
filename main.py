@@ -35,7 +35,6 @@ def get_all_products_graphql():
     has_next_page = True
     
     while has_next_page:
-        # Build the query with cursor if it exists
         query = """
         {
             products(first: 250 %s) {
@@ -45,6 +44,7 @@ def get_all_products_graphql():
                         id
                         title
                         tags
+                        status
                     }
                 }
                 pageInfo {
@@ -54,19 +54,19 @@ def get_all_products_graphql():
         }
         """ % (', after: "%s"' % cursor if cursor else '')
         
-        url = f"{shop_url}/admin/api/2023-04/graphql.json"
+        url = f"{shop_url}/admin/api/2024-10/graphql.json"
         
         headers = {
             "X-Shopify-Access-Token": access_token,
             "Content-Type": "application/json"
         }
         
-        response = requests.post(url, json={'query': query}, headers=headers)
-        
-        if response.status_code == 200:
+        try:
+            response = requests.post(url, json={'query': query}, headers=headers)
+            response.raise_for_status()
+            
             json_response = response.json()
             
-            # Check for GraphQL errors
             if 'errors' in json_response:
                 print("GraphQL errors:", json_response['errors'])
                 break
@@ -75,12 +75,14 @@ def get_all_products_graphql():
             
             # Extract products from the response
             for edge in data['edges']:
-                products.append(edge['node'])
+                if edge['node'].get('status') == 'ACTIVE':
+                    products.append(edge['node'])
                 cursor = edge['cursor']
             
             has_next_page = data['pageInfo']['hasNextPage']
-        else:
-            print("Request failed with status code:", response.status_code)
+            
+        except requests.exceptions.RequestException as e:
+            print(f"Request failed: {e}")
             break
             
     return products
@@ -183,7 +185,6 @@ def get_products_to_update(conn, limit: int = None) -> List[Dict]:
 def update_shopify_products(products: List[Dict], dry_run: bool = True):
     """Update Shopify products with new tags"""
     
-    # GraphQL mutation for updating product
     update_mutation = """
     mutation productUpdate($input: ProductInput!) {
         productUpdate(input: $input) {
@@ -191,6 +192,7 @@ def update_shopify_products(products: List[Dict], dry_run: bool = True):
                 id
                 title
                 tags
+                status
             }
             userErrors {
                 field
@@ -200,7 +202,7 @@ def update_shopify_products(products: List[Dict], dry_run: bool = True):
     }
     """
     
-    url = f"{shop_url}/admin/api/2023-04/graphql.json"
+    url = f"{shop_url}/admin/api/2024-10/graphql.json"
     headers = {
         "X-Shopify-Access-Token": access_token,
         "Content-Type": "application/json"
@@ -223,23 +225,32 @@ def update_shopify_products(products: List[Dict], dry_run: bool = True):
             print(f"Would update {product['title']}: {product['tags']}")
             success_count += 1
             continue
-            
-        response = requests.post(
-            url,
-            json={'query': update_mutation, 'variables': variables},
-            headers=headers
-        )
         
-        if response.status_code == 200:
+        try:
+            response = requests.post(
+                url,
+                json={'query': update_mutation, 'variables': variables},
+                headers=headers
+            )
+            response.raise_for_status()
+            
             result = response.json()
-            if 'errors' in result or result.get('data', {}).get('productUpdate', {}).get('userErrors'):
-                print(f"Error updating {product['title']}: {result}")
+            
+            if 'errors' in result:
+                print(f"GraphQL errors for {product['title']}: {result['errors']}")
+                error_count += 1
+                continue
+                
+            user_errors = result.get('data', {}).get('productUpdate', {}).get('userErrors', [])
+            if user_errors:
+                print(f"User errors for {product['title']}: {user_errors}")
                 error_count += 1
             else:
                 success_count += 1
                 print(f"Updated {product['title']}")
-        else:
-            print(f"Request failed for {product['title']}: {response.status_code}")
+                
+        except requests.exceptions.RequestException as e:
+            print(f"Request failed for {product['title']}: {e}")
             error_count += 1
     
     status = "Would have updated" if dry_run else "Updated"
