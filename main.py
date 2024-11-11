@@ -1,5 +1,7 @@
+import argparse
 import os
 import sqlite3
+from typing import Dict, List
 
 import requests
 from dotenv import load_dotenv
@@ -111,7 +113,8 @@ def clean_products_by_tags(conn):
         "Outlet",
         "Like New",
         "Saddles",
-        "Gift Card"
+        "Gift Card",
+        "Premier Gear"
     ]
     
     # Count products before cleanup
@@ -138,8 +141,115 @@ def clean_products_by_tags(conn):
     print(f"Removed {removed_count} products with excluded tags")
     print(f"Remaining products in database: {count_after}")
 
+def add_premier_gear_tag(conn):
+    cursor = conn.cursor()
+    
+    # Count products before update
+    cursor.execute('SELECT COUNT(*) FROM products')
+    count = cursor.fetchone()[0]
+    
+    # Update all remaining products to add "Premier Gear" tag
+    cursor.execute('''
+        UPDATE products 
+        SET tags = CASE
+            WHEN tags = '' OR tags IS NULL THEN 'Premier Gear'
+            ELSE tags || ',Premier Gear'
+        END
+    ''')
+    
+    conn.commit()
+    print(f"Added 'Premier Gear' tag to {count} products")
+
+def get_products_to_update(conn) -> List[Dict]:
+    """Get products from SQLite that need tag updates"""
+    cursor = conn.cursor()
+    cursor.execute('SELECT shopify_id, title, tags FROM products')
+    products = cursor.fetchall()
+    
+    return [
+        {
+            'id': product[0],
+            'title': product[1],
+            'tags': product[2].split(',') if product[2] else []
+        }
+        for product in products
+    ]
+
+def update_shopify_products(products: List[Dict], dry_run: bool = True):
+    """Update Shopify products with new tags"""
+    
+    # GraphQL mutation for updating product
+    update_mutation = """
+    mutation productUpdate($input: ProductInput!) {
+        productUpdate(input: $input) {
+            product {
+                id
+                title
+                tags
+            }
+            userErrors {
+                field
+                message
+            }
+        }
+    }
+    """
+    
+    url = f"{shop_url}/admin/api/2023-04/graphql.json"
+    headers = {
+        "X-Shopify-Access-Token": access_token,
+        "Content-Type": "application/json"
+    }
+    
+    print(f"{'DRY RUN: ' if dry_run else ''}Preparing to update {len(products)} products...")
+    
+    success_count = 0
+    error_count = 0
+    
+    for product in products:
+        variables = {
+            "input": {
+                "id": product['id'],
+                "tags": product['tags']
+            }
+        }
+        
+        if dry_run:
+            print(f"Would update {product['title']}: {product['tags']}")
+            success_count += 1
+            continue
+            
+        response = requests.post(
+            url,
+            json={'query': update_mutation, 'variables': variables},
+            headers=headers
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            if 'errors' in result or result.get('data', {}).get('productUpdate', {}).get('userErrors'):
+                print(f"Error updating {product['title']}: {result}")
+                error_count += 1
+            else:
+                success_count += 1
+                print(f"Updated {product['title']}")
+        else:
+            print(f"Request failed for {product['title']}: {response.status_code}")
+            error_count += 1
+    
+    status = "Would have updated" if dry_run else "Updated"
+    print(f"\n{status} {success_count} products successfully")
+    if not dry_run and error_count:
+        print(f"Failed to update {error_count} products")
+
 # Main execution
 def main():
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description='Update Shopify product tags')
+    parser.add_argument('--apply', action='store_true', 
+                      help='Actually apply the changes to Shopify (default is dry-run)')
+    args = parser.parse_args()
+    
     # Create or connect to database
     conn = create_database()
     
@@ -153,6 +263,15 @@ def main():
     
     # Clean up products with excluded tags
     clean_products_by_tags(conn)
+    
+    # Add Premier Gear tag to remaining products
+    add_premier_gear_tag(conn)
+    
+    # Get products to update from SQLite
+    products_to_update = get_products_to_update(conn)
+    
+    # Update Shopify products (dry run by default)
+    update_shopify_products(products_to_update, dry_run=not args.apply)
     
     # Close connection
     conn.close()
