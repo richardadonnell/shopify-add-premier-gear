@@ -160,10 +160,15 @@ def add_premier_gear_tag(conn):
     conn.commit()
     print(f"Added 'Premier Gear' tag to {count} products")
 
-def get_products_to_update(conn) -> List[Dict]:
+def get_products_to_update(conn, limit: int = None) -> List[Dict]:
     """Get products from SQLite that need tag updates"""
     cursor = conn.cursor()
-    cursor.execute('SELECT shopify_id, title, tags FROM products')
+    
+    if limit:
+        cursor.execute('SELECT shopify_id, title, tags FROM products LIMIT ?', (limit,))
+    else:
+        cursor.execute('SELECT shopify_id, title, tags FROM products')
+        
     products = cursor.fetchall()
     
     return [
@@ -248,6 +253,8 @@ def main():
     parser = argparse.ArgumentParser(description='Update Shopify product tags')
     parser.add_argument('--apply', action='store_true', 
                       help='Actually apply the changes to Shopify (default is dry-run)')
+    parser.add_argument('--limit', type=int,
+                      help='Number of products to update (default is all products)')
     args = parser.parse_args()
     
     # Create or connect to database
@@ -267,8 +274,8 @@ def main():
     # Add Premier Gear tag to remaining products
     add_premier_gear_tag(conn)
     
-    # Get products to update from SQLite
-    products_to_update = get_products_to_update(conn)
+    # Get products to update from SQLite (with limit if specified)
+    products_to_update = get_products_to_update(conn, args.limit)
     
     # Update Shopify products (dry run by default)
     update_shopify_products(products_to_update, dry_run=not args.apply)
