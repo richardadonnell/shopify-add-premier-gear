@@ -102,6 +102,42 @@ def save_products_to_db(products, conn):
     
     conn.commit()
 
+def clean_products_by_tags(conn):
+    cursor = conn.cursor()
+    
+    # Tags to exclude
+    exclude_tags = [
+        "Like New & Gently Used Saddles",
+        "Outlet",
+        "Like New",
+        "Saddles",
+        "Gift Card"
+    ]
+    
+    # Count products before cleanup
+    cursor.execute('SELECT COUNT(*) FROM products')
+    count_before = cursor.fetchone()[0]
+    
+    # Build the SQL query dynamically
+    conditions = []
+    for tag in exclude_tags:
+        conditions.append(f"tags LIKE '%{tag}%'")
+    
+    where_clause = ' OR '.join(conditions)
+    delete_query = f'DELETE FROM products WHERE {where_clause}'
+    
+    # Execute the deletion
+    cursor.execute(delete_query)
+    conn.commit()
+    
+    # Count products after cleanup
+    cursor.execute('SELECT COUNT(*) FROM products')
+    count_after = cursor.fetchone()[0]
+    
+    removed_count = count_before - count_after
+    print(f"Removed {removed_count} products with excluded tags")
+    print(f"Remaining products in database: {count_after}")
+
 # Main execution
 def main():
     # Create or connect to database
@@ -115,11 +151,8 @@ def main():
     save_products_to_db(all_products, conn)
     print("Products saved to shopify_products.db")
     
-    # Verify data (optional)
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM products')
-    count = cursor.fetchone()[0]
-    print(f"Products in database: {count}")
+    # Clean up products with excluded tags
+    clean_products_by_tags(conn)
     
     # Close connection
     conn.close()
